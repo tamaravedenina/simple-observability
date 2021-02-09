@@ -7,17 +7,40 @@ import (
 	"syscall"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/tamaravedenina/observability/internal"
+	otelg "go.opentelemetry.io/otel/api/global"
+	"go.opentelemetry.io/otel/exporters/stdout"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.uber.org/zap"
 )
+
+const serviceName = "simple-observability"
 
 func main() {
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
 
-	appLogger := logger.Sugar().Named("observability")
+	appLogger := logger.Sugar().Named(serviceName)
 	appLogger.Info("The application is starting...")
+
+	exporter, err := stdout.NewExporter(stdout.WithPrettyPrint())
+	if err != nil {
+		appLogger.Fatalw("Can't enable Open Telemetry exporter", "err", err)
+	}
+
+	tp, err := sdktrace.NewProvider(
+		sdktrace.WithConfig(
+			sdktrace.Config{DefaultSampler: sdktrace.AlwaysSample()},
+		),
+		sdktrace.WithSyncer(exporter),
+	)
+
+	if err != nil {
+		appLogger.Fatalw("Can't enable Open Telemetry provider", "err", err)
+	}
+	otelg.SetTraceProvider(tp)
+
+	tracer := otelg.Tracer(serviceName)
 
 	appLogger.Info("Reading configuration...")
 	port := os.Getenv("PORT")
@@ -33,8 +56,8 @@ func main() {
 	appLogger.Info("Configuration is ready...")
 
 	shutdown := make(chan error, 2)
-	bl := internal.BusinessLogic(port, appLogger.With("module", "bl"), shutdown)
-	diag := internal.Diagnostics(diagPort, appLogger.With("module", "diag"), shutdown)
+	bl := internal.BusinessLogic(port, appLogger.With("module", "bl"), tracer, shutdown)
+	diag := internal.Diagnostics(diagPort, appLogger.With("module", "diag"), tracer, shutdown)
 	appLogger.Info("Servers are ready")
 
 	interrupt := make(chan os.Signal, 1)
@@ -51,7 +74,7 @@ func main() {
 	timeout, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelFunc()
 
-	err := bl.Shutdown(timeout)
+	err = bl.Shutdown(timeout)
 	if err != nil {
 		appLogger.Errorw("Got an error from the business logic server", "err", err)
 	}

@@ -1,17 +1,23 @@
 package internal
 
 import (
+	muxtrace "go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux"
 	"go.uber.org/zap"
 	"net"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	oteltrace "go.opentelemetry.io/otel/api/trace"
 )
 
 // Diagnostics responsible for diagnostics logic of the app
-func Diagnostics(port string, appLogger *zap.SugaredLogger, shutdown chan<- error) *http.Server {
+func Diagnostics(port string, appLogger *zap.SugaredLogger, tracer oteltrace.Tracer, shutdown chan<- error) *http.Server {
 	r := mux.NewRouter()
-	r.HandleFunc("/health", handleHealth())
+
+	mw := muxtrace.Middleware("diag", muxtrace.WithTracer(tracer))
+	r.Use(mw)
+
+	r.HandleFunc("/health", handleHealth(appLogger.With("handle", "health")))
 
 	server := http.Server{
 		Addr:    net.JoinHostPort("", port),
@@ -30,9 +36,10 @@ func Diagnostics(port string, appLogger *zap.SugaredLogger, shutdown chan<- erro
 	return &server
 }
 
-func handleHealth() func(http.ResponseWriter, *http.Request) {
-	return func(
-		w http.ResponseWriter, r *http.Request) {
+func handleHealth(appLogger *zap.SugaredLogger) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		appLogger.Info("Received a call")
 		w.WriteHeader(http.StatusOK)
 	}
 }
