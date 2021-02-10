@@ -2,8 +2,9 @@ package internal
 
 import (
 	muxtrace "go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux"
-	"go.opentelemetry.io/otel/instrumentation/httptrace"
+	"go.opentelemetry.io/otel/api/metric"
 	oteltrace "go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/instrumentation/httptrace"
 	"go.uber.org/zap"
 	"net"
 	"net/http"
@@ -11,13 +12,15 @@ import (
 	"github.com/gorilla/mux"
 )
 
-func BusinessLogic(port string, appLogger *zap.SugaredLogger, tracer oteltrace.Tracer, shutdown chan<- error) *http.Server {
+func BusinessLogic(port string, appLogger *zap.SugaredLogger, tracer oteltrace.Tracer, meter metric.Meter, shutdown chan<- error) *http.Server {
+	rentCounter := metric.Must(meter).NewInt64Counter("rent.count")
+
 	r := mux.NewRouter()
 
 	mw := muxtrace.Middleware("bl", muxtrace.WithTracer(tracer))
 	r.Use(mw)
 
-	r.HandleFunc("/rent", handleRent(appLogger.With("handle", "rent"), "http://127.0.0.1:"+port+"/check"))
+	r.HandleFunc("/rent", handleRent(appLogger.With("handle", "rent"), rentCounter, "http://127.0.0.1:"+port+"/check"))
 	r.HandleFunc("/check", handleCheck(appLogger.With("handle", "check")))
 
 	server := http.Server{
@@ -37,8 +40,9 @@ func BusinessLogic(port string, appLogger *zap.SugaredLogger, tracer oteltrace.T
 	return &server
 }
 
-func handleRent(appLogger *zap.SugaredLogger, checkURL string) func(http.ResponseWriter, *http.Request) {
+func handleRent(appLogger *zap.SugaredLogger, rentCounter metric.Int64Counter, checkURL string) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+
 
 		appLogger.Info("Received a call")
 
@@ -57,6 +61,7 @@ func handleRent(appLogger *zap.SugaredLogger, checkURL string) func(http.Respons
 			return
 		}
 
+		rentCounter.Add(r.Context(), 1)
 		w.WriteHeader(checkResp.StatusCode)
 	}
 }
